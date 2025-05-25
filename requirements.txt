@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+gunicorn
+httpx
+crawl4ai
+python-dotenv
+pydantic 
