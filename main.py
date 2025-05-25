@@ -157,4 +157,8 @@ async def process_groq_request(request: GroqRequest) -> Dict[str, Any]:
             except Exception as e:
                 answer = f"Both Groq and OpenAI failed for this prompt: {str(e)}"
         groq_responses[prompt_obj["title"]] = answer
-    return {"groq_responses": groq_responses} 
+    return {"groq_responses": groq_responses}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True) 
