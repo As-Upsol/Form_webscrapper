@@ -6,6 +6,7 @@ import asyncio
 import httpx
 
 from crawl4ai.async_webcrawler import AsyncWebCrawler
+from matching_prompts import get_analysis_prompts
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
@@ -29,6 +30,9 @@ app = FastAPI()
 class GroqRequest(BaseModel):
     url: HttpUrl
     prompts: Optional[List[str]] = None
+
+class AnalysisRequest(BaseModel):
+    base_responses: Dict[str, str]
 
 def load_prompts_from_file(markdown: str) -> List[Dict[str, str]]:
     if not os.path.exists(PROMPTS_FILE):
@@ -158,6 +162,36 @@ async def process_groq_request(request: GroqRequest) -> Dict[str, Any]:
                 answer = f"Both Groq and OpenAI failed for this prompt: {str(e)}"
         groq_responses[prompt_obj["title"]] = answer
     return {"groq_responses": groq_responses}
+
+@app.post("/process_analysis")
+async def process_analysis(request: AnalysisRequest) -> Dict[str, Any]:
+    groq_responses = request.base_responses
+
+    # Step 2: Extract required fields for analysis prompts
+    long_offering = groq_responses.get("Company_Offering", "")
+    summary = groq_responses.get("Company_Description", "")
+    long_problem_solved = groq_responses.get("Problem_Solved_Market_Pain_Point", "")
+    long_use_cases = groq_responses.get("Use_Cases_and_End_Users", "")
+    target_customers_description = groq_responses.get("Target_Customer_Description", "")
+
+    # Step 3: Generate analysis prompts
+    analysis_prompts_dict = get_analysis_prompts(
+        long_offering, summary, long_problem_solved, long_use_cases, target_customers_description
+    )
+    analysis_responses = {}
+    for title, prompt in analysis_prompts_dict.items():
+        try:
+            answer = await query_groq(prompt)
+        except Exception:
+            try:
+                answer = await query_openai(prompt)
+            except Exception as e:
+                answer = f"Both Groq and OpenAI failed for this prompt: {str(e)}"
+        analysis_responses[title] = answer
+
+    return {
+        "analysis_responses": analysis_responses
+    }
 
 if __name__ == "__main__":
     import uvicorn
