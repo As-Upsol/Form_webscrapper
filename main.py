@@ -11,7 +11,7 @@ from matching_prompts import get_analysis_prompts
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama3-8b-8192"
+GROQ_MODEL = "llama-3.1-8b-instant"
 PROMPTS_FILE = "prompts.txt"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
@@ -97,26 +97,26 @@ async def fetch_html(url: str) -> str:
         response.raise_for_status()
         return response.text
 
-async def openai_markdown_from_html(html: str, url: str) -> str:
-    if not OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY environment variable not set.")
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    # Prompt OpenAI to convert HTML to markdown
-    data = {
-        "model": OPENAI_MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": html}
-        ]
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(OPENAI_API_URL, headers=headers, json=data)
-        response.raise_for_status()
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
+# async def openai_markdown_from_html(html: str, url: str) -> str:
+#     if not OPENAI_API_KEY:
+#         raise RuntimeError("OPENAI_API_KEY environment variable not set.")
+#     headers = {
+#         "Authorization": f"Bearer {OPENAI_API_KEY}",
+#         "Content-Type": "application/json"
+#     }
+#     # Prompt OpenAI to convert HTML to markdown
+#     data = {
+#         "model": OPENAI_MODEL,
+#         "messages": [
+#             {"role": "system", "content": SYSTEM_PROMPT},
+#             {"role": "user", "content": html}
+#         ]
+#     }
+#     async with httpx.AsyncClient() as client:
+#         response = await client.post(OPENAI_API_URL, headers=headers, json=data)
+#         response.raise_for_status()
+#         result = response.json()
+#         return result["choices"][0]["message"]["content"]
 
 async def query_openai(prompt: str) -> str:
     if not OPENAI_API_KEY:
@@ -138,39 +138,122 @@ async def query_openai(prompt: str) -> str:
         result = response.json()
         return result["choices"][0]["message"]["content"]
 
+async def query_groq_with_retry(prompt: str, max_retries: int = 3) -> str:
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                # Exponential backoff: 2, 4, 8 seconds
+                await asyncio.sleep(2 ** attempt)
+            
+            return await query_groq(prompt)
+        except Exception as e:
+            if attempt == max_retries - 1:  # Last attempt
+                raise e
+            continue
+
+async def query_openai_with_retry(prompt: str, max_retries: int = 3) -> str:
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                # Exponential backoff: 2, 4, 8 seconds
+                await asyncio.sleep(2 ** attempt)
+            
+            return await query_openai(prompt)
+        except Exception as e:
+            if attempt == max_retries - 1:  # Last attempt
+                raise e
+            continue
+
+def clean_response(text: str) -> str:
+    # Remove markdown formatting
+    text = text.replace("**", "")
+    text = text.replace("*", "")
+    text = text.replace("###", "")
+    text = text.replace("##", "")
+    text = text.replace("#", "")
+    
+    # Clean up bullet points
+    text = text.replace("- ", "")
+    text = text.replace("• ", "")
+    
+    # Remove extra whitespace and newlines
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    text = "; ".join(lines)
+    
+    # Remove extra semicolons
+    text = text.replace(";;", ";")
+    text = text.replace("; ;", ";")
+    
+    # Clean up any remaining formatting
+    text = text.replace(":", ": ")
+    text = text.replace("  ", " ")
+    
+    return text.strip()
+
 @app.post("/process")
 async def process_groq_request(request: GroqRequest) -> Dict[str, Any]:
-    markdown = None
-    html = None
-    crawl4ai_error = None
+    # Step 1: Scrape the page using crawl4ai
     try:
         async with AsyncWebCrawler() as crawler:
             result = await crawler.arun(str(request.url))
             markdown = result.markdown.raw_markdown if result.markdown else None
             html = result.html
+            
+            if not markdown and not html:
+                raise ValueError("Failed to extract content from webpage")
     except Exception as e:
-        crawl4ai_error = str(e)
-    # Fallback if crawl4ai fails or markdown is empty
-    if not markdown:
-        try:
-            html = await fetch_html(str(request.url))
-            markdown = await openai_markdown_from_html(html, str(request.url))
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Both crawl4ai and OpenAI fallback failed: {crawl4ai_error} | {str(e)}")
-    # Load prompts from file or request
+        raise HTTPException(status_code=500, detail=f"Failed to scrape webpage: {str(e)}")
+
+    # Load prompts from file
     prompt_objs = load_prompts_from_file(markdown)
-    # Query Groq for each prompt, fallback to OpenAI if Groq fails
+    
+    # Step 2: Process each prompt through Groq with validation
     groq_responses = {}
     for prompt_obj in prompt_objs:
+        title = prompt_obj["title"]
+        prompt = prompt_obj["prompt"]
+        
+        # Add delay between requests to avoid rate limiting
+        await asyncio.sleep(1)
+        
+        # First attempt: Query Groq
         try:
-            answer = await query_groq(prompt_obj["prompt"])
-        except Exception:
-            # Fallback to OpenAI for this prompt
+            initial_answer = await query_groq_with_retry(prompt)
+            initial_answer = clean_response(initial_answer)
+            
+            # Add delay before validation
+            await asyncio.sleep(1)
+            
+            # Step 3: Validate the response with a second Groq call
+            validation_prompt = f"""Review this answer for accuracy and completeness. If it's incorrect or incomplete, explain why and provide the correct answer. If it's correct, just return 'VALID'.
+
+Original prompt: {prompt}
+Answer to validate: {initial_answer}"""
+            
+            validation_result = await query_groq_with_retry(validation_prompt)
+            
+            if validation_result.strip().upper() == "VALID":
+                groq_responses[title] = initial_answer
+            else:
+                # If validation failed, try one more time with Groq
+                await asyncio.sleep(1)  # Add delay before retry
+                try:
+                    second_attempt = await query_groq_with_retry(prompt)
+                    groq_responses[title] = clean_response(second_attempt)
+                except Exception:
+                    raise Exception("Groq second attempt failed")
+                    
+        except Exception as groq_error:
+            # Step 4: Fallback to OpenAI if Groq fails
+            await asyncio.sleep(2)  # Longer delay before switching to OpenAI
             try:
-                answer = await query_openai(prompt_obj["prompt"])
+                openai_prompt = f"""Analyze this URL and answer based on this prompt: {prompt}
+                URL: {request.url}"""
+                answer = await query_openai_with_retry(openai_prompt)
+                groq_responses[title] = clean_response(answer)
             except Exception as e:
-                answer = f"Both Groq and OpenAI failed for this prompt: {str(e)}"
-        groq_responses[prompt_obj["title"]] = answer
+                groq_responses[title] = f"Failed to get response after retries: {str(e)}"
+
     return {"groq_responses": groq_responses}
 
 @app.post("/process_analysis")
@@ -191,13 +274,14 @@ async def process_analysis(request: AnalysisRequest) -> Dict[str, Any]:
     analysis_responses = {}
     for title, prompt in analysis_prompts_dict.items():
         try:
-            answer = await query_groq(prompt)
+            answer = await query_groq_with_retry(prompt)
+            analysis_responses[title] = clean_response(answer)
         except Exception:
             try:
-                answer = await query_openai(prompt)
+                answer = await query_openai_with_retry(prompt)
+                analysis_responses[title] = clean_response(answer)
             except Exception as e:
-                answer = f"Both Groq and OpenAI failed for this prompt: {str(e)}"
-        analysis_responses[title] = answer
+                analysis_responses[title] = f"Failed to get response after retries: {str(e)}"
 
     return {
         "analysis_responses": analysis_responses
