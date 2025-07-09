@@ -267,11 +267,30 @@ async def process_analysis(request: AnalysisRequest) -> Dict[str, Any]:
     long_use_cases = groq_responses.get("Use_Cases_and_End_Users", "")
     target_customers_description = groq_responses.get("Target_Customer_Description", "")
 
+    industry_category= groq_responses.get('industry_category','')
+    product_service_tags= groq_responses.get('product_service_tags','')
+    technology_delivery= groq_responses.get('technology_delivery','')
+    supply_chain_role= groq_responses.get('supply_chain_role','')
+    target_functional_category= groq_responses.get('target_functional_category','')
+    target_customer_type= groq_responses.get('target_customer_type','')
+    target_customer_industries= groq_responses.get('target_customer_industries','')
+
+
+
     # Step 3: Generate analysis prompts
     analysis_prompts_dict = get_analysis_prompts(
         long_offering, summary, long_problem_solved, long_use_cases, target_customers_description
     )
-    analysis_responses = {}
+    analysis_responses = {
+        'industry_category': industry_category,
+        'product_service_tags': product_service_tags,
+        'technology_delivery': technology_delivery,
+        'supply_chain_role': supply_chain_role,
+        'target_functional_category': target_functional_category,
+        'target_customer_type': target_customer_type,
+        'target_customer_industries': target_customer_industries,
+    }
+
     for title, prompt in analysis_prompts_dict.items():
         try:
             answer = await query_groq_with_retry(prompt)
