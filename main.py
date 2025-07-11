@@ -261,11 +261,11 @@ async def process_analysis(request: AnalysisRequest) -> Dict[str, Any]:
     groq_responses = request.base_responses
 
     # Step 2: Extract required fields for analysis prompts
-    long_offering = groq_responses.get("Company_Offering", "")
-    summary = groq_responses.get("Company_Description", "")
-    long_problem_solved = groq_responses.get("Problem_Solved_Market_Pain_Point", "")
-    long_use_cases = groq_responses.get("Use_Cases_and_End_Users", "")
-    target_customers_description = groq_responses.get("Target_Customer_Description", "")
+    long_offering = groq_responses.get("long_offering", "")
+    summary = groq_responses.get("summary", "")
+    long_problem_solved = groq_responses.get("long_problem_solved", "")
+    long_use_cases = groq_responses.get("long_use_cases", "")
+    target_customers_description = groq_responses.get("target_customers_description", "")
 
     industry_category= groq_responses.get('industry_category','')
     product_service_tags= groq_responses.get('product_service_tags','')
