@@ -289,6 +289,11 @@ async def process_analysis(request: AnalysisRequest) -> Dict[str, Any]:
         'target_functional_category': target_functional_category,
         'target_customer_type': target_customer_type,
         'target_customer_industries': target_customer_industries,
+        'long_offering': long_offering,
+        'summary': summary,
+        'long_problem_solved': long_problem_solved,
+        'long_use_cases': long_use_cases,
+        'target_customers_description': target_customers_description,
     }
 
     for title, prompt in analysis_prompts_dict.items():
